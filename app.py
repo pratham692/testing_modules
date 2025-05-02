@@ -1,86 +1,127 @@
 import streamlit as st
 import json
+import random
+import string
+from datetime import datetime
+import os
 
-st.set_page_config(page_title="Mock Test Software", layout="centered")
+DATA_FILE = "test_data.json"
 
-if "questions" not in st.session_state:
-    st.session_state.questions = []
-if "answers" not in st.session_state:
-    st.session_state.answers = []
-if "submitted" not in st.session_state:
-    st.session_state.submitted = False
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    else:
+        return {}
 
-def load_questions(file):
-    try:
-        questions = json.load(file)
-        if not isinstance(questions, list):
-            st.error("Uploaded JSON must be a list of questions.")
-            return []
-        for q in questions:
-            if not all(k in q for k in ("question", "options", "answer")):
-                st.error("Each question must have 'question', 'options', and 'answer' keys.")
-                return []
-        return questions
-    except Exception as e:
-        st.error(f"Error loading JSON: {e}")
-        return []
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
-def show_admin():
-    st.header("Admin - Upload Questions JSON")
-    uploaded_file = st.file_uploader("Upload questions JSON file", type=["json"])
-    if uploaded_file is not None:
-        questions = load_questions(uploaded_file)
-        if questions:
-            st.session_state.questions = questions
-            st.session_state.submitted = False
-            st.success(f"Loaded {len(questions)} questions successfully.")
+def generate_code(length=6):
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
-def show_test():
-    if not st.session_state.questions:
-        st.warning("No questions available. Please ask admin to upload questions.")
-        return
-    st.header("Take the Mock Test")
-    with st.form("test_form"):
+def admin_view(data):
+    st.title("Admin Panel - Mock Test")
+
+    menu = ["Create Test Code", "Upload Questions", "View Reports"]
+    choice = st.sidebar.selectbox("Select Action", menu)
+
+    if choice == "Create Test Code":
+        st.header("Create Test Code")
+        if st.button("Generate New Test Code"):
+            code = generate_code()
+            if code not in data:
+                data[code] = {"questions": [], "results": []}
+                save_data(data)
+                st.success(f"New test code created: {code}")
+            else:
+                st.error("Code collision, try again.")
+        st.write("Existing Test Codes:")
+        st.write(list(data.keys()))
+
+    elif choice == "Upload Questions":
+        st.header("Upload Questions")
+        code = st.text_input("Enter Test Code")
+        if code:
+            if code not in data:
+                st.error("Test code does not exist. Please create it first.")
+            else:
+                questions_text = st.text_area("Enter Questions JSON", height=200, help='Example: [{"question":"Q1","options":["A","B","C"],"correctAnswer":0}]')
+                if st.button("Upload Questions"):
+                    try:
+                        questions = json.loads(questions_text)
+                        if isinstance(questions, list):
+                            data[code]["questions"] = questions
+                            save_data(data)
+                            st.success("Questions uploaded successfully.")
+                        else:
+                            st.error("Questions JSON must be a list.")
+                    except Exception as e:
+                        st.error(f"Invalid JSON: {e}")
+
+    elif choice == "View Reports":
+        st.header("View Test Reports")
+        code = st.text_input("Enter Test Code to View Report")
+        if code:
+            if code not in data:
+                st.error("Test code does not exist.")
+            else:
+                results = data[code].get("results", [])
+                if not results:
+                    st.info("No test results found for this code.")
+                else:
+                    st.write(f"Total Tests Taken: {len(results)}")
+                    for i, result in enumerate(results, 1):
+                        dt = datetime.fromisoformat(result["date"]).strftime("%Y-%m-%d %H:%M:%S")
+                        st.write(f"Test {i}: Score = {result['score']} on {dt}")
+
+def user_view(data):
+    st.title("Take Mock Test")
+
+    code = st.text_input("Enter Test Code")
+    if code:
+        if code not in data:
+            st.error("Test code not found.")
+            return
+        questions = data[code].get("questions", [])
+        if not questions:
+            st.info("No questions available for this test.")
+            return
+
         answers = []
-        for idx, q in enumerate(st.session_state.questions):
-            answer = st.radio(q["question"], q["options"], key=f"q{idx}")
-            answers.append(answer)
-        submitted = st.form_submit_button("Submit Answers")
-        if submitted:
-            st.session_state.answers = answers
-            st.session_state.submitted = True
-
-def show_results():
-    st.header("Test Results")
-    score = 0
-    for idx, q in enumerate(st.session_state.questions):
-        correct = q["answer"] == st.session_state.answers[idx]
-        if correct:
-            score += 1
-        st.markdown(f"**Q{idx+1}: {q['question']}**")
-        st.markdown(f"- Your answer: {st.session_state.answers[idx]} {'✅' if correct else '❌'}")
-        if not correct:
-            st.markdown(f"- Correct answer: {q['answer']}")
-        st.write("---")
-    st.subheader(f"Your Score: {score} / {len(st.session_state.questions)}")
-    if st.button("Retake Test"):
-        st.session_state.answers = []
-        st.session_state.submitted = False
+        with st.form("test_form"):
+            for i, q in enumerate(questions):
+                st.write(f"**Q{i+1}: {q['question']}**")
+                options = q.get("options", [])
+                answer = st.radio("", options, key=f"q{i}")
+                answers.append(answer)
+            submitted = st.form_submit_button("Submit Test")
+            if submitted:
+                score = 0
+                for i, q in enumerate(questions):
+                    correct_index = q.get("correctAnswer")
+                    if correct_index is not None and options[correct_index] == answers[i]:
+                        score += 1
+                # Save result
+                result = {"score": score, "date": datetime.now().isoformat()}
+                data[code].setdefault("results", []).append(result)
+                save_data(data)
+                st.success(f"Test submitted successfully. Your score: {score} / {len(questions)}")
 
 def main():
-    st.title("Mock Test Software")
-    menu = ["Admin Upload", "Take Test"]
-    choice = st.sidebar.selectbox("Menu", menu)
+    st.sidebar.title("Mock Test System")
+    user_type = st.sidebar.radio("Select User Type", ["Admin", "User"])
 
-    if choice == "Admin Upload":
-        show_admin()
-    elif choice == "Take Test":
-        if st.session_state.submitted:
-            show_results()
-        else:
-            show_test()
+    data = load_data()
+
+    if user_type == "Admin":
+        admin_view(data)
+    else:
+        user_view(data)
 
 if __name__ == "__main__":
     main()
+
 
 
